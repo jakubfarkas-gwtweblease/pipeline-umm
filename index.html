@@ -347,6 +347,7 @@ const App = () => {
   const [logEdit, setLogEdit] = useState(null); // {cid, idx, text}
   const [showAllLog, setShowAllLog] = useState(false);
   const [nextDraft, setNextDraft] = useState(null); // {cid, text, date}
+  const [copiedInfo, setCopiedInfo] = useState(null); // client id
   const [backupMsg, setBackupMsg] = useState("");
   const fileRef = useRef(null);
 
@@ -494,15 +495,22 @@ const App = () => {
       "END:VCARD",
     ].filter(Boolean).join("\r\n");
     const fname = `${(cl.name || "kontakt").replace(/\s+/g, "-")}.vcf`;
+    const blob = new Blob([vcf], { type: "text/vcard;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    /* 1) priame otvorenie — iOS ukáže náhľad kontaktu s "Vytvoriť nový kontakt" */
+    let opened = null;
+    try { opened = window.open(url, "_blank"); } catch (e) {}
+    if (opened) { setTimeout(() => URL.revokeObjectURL(url), 60000); return; }
+    /* 2) share sheet ako záloha */
     try {
       const file = new File([vcf], fname, { type: "text/vcard" });
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file] });
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
         return;
       }
-    } catch (e) { if (e && e.name === "AbortError") return; }
-    const blob = new Blob([vcf], { type: "text/vcard" });
-    const url = URL.createObjectURL(blob);
+    } catch (e) { if (e && e.name === "AbortError") { setTimeout(() => URL.revokeObjectURL(url), 2000); return; } }
+    /* 3) stiahnutie súboru */
     const a = document.createElement("a");
     a.href = url; a.download = fname;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
@@ -596,7 +604,17 @@ const App = () => {
                   {cl.email && <ActBtn onClick={() => copyText(cl.email)} color={C.dim} title="Kopírovať e-mail">⧉ mail</ActBtn>}
                   {cl.ig && <ActBtn href={extURL(cl.ig)} color="#D462A6" title="Instagram">IG</ActBtn>}
                   {cl.fb && <ActBtn href={extURL(cl.fb)} color={C.blue} title="Facebook">FB</ActBtn>}
-                  <ActBtn onClick={() => copyText(clientInfoText(cl), "Info skopírované ✓ — môžeš poslať")} color={C.brass} title="Kopírovať všetky info">⧉ Info</ActBtn>
+                  <ActBtn onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(clientInfoText(cl));
+                        setCopiedInfo(cl.id);
+                        setTimeout(() => setCopiedInfo(null), 1500);
+                      } catch (e) { setBackupMsg("Kopírovanie sa nepodarilo."); }
+                    }}
+                    color={copiedInfo === cl.id ? C.green : C.brass}
+                    title="Kopírovať všetky info">
+                    {copiedInfo === cl.id ? "✓ Skopírované" : "⧉ Info"}
+                  </ActBtn>
                   <ActBtn onClick={() => saveVCard(cl)} color={C.green} title="Uložiť do kontaktov v telefóne">👤 Kontakt</ActBtn>
                 </div>
                 {(cl.phone || cl.email) && (
