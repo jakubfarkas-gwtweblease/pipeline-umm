@@ -497,11 +497,7 @@ const App = () => {
     const fname = `${(cl.name || "kontakt").replace(/\s+/g, "-")}.vcf`;
     const blob = new Blob([vcf], { type: "text/vcard;charset=utf-8" });
     const url = URL.createObjectURL(blob);
-    /* 1) priame otvorenie — iOS ukáže náhľad kontaktu s "Vytvoriť nový kontakt" */
-    let opened = null;
-    try { opened = window.open(url, "_blank"); } catch (e) {}
-    if (opened) { setTimeout(() => URL.revokeObjectURL(url), 60000); return; }
-    /* 2) share sheet ako záloha */
+    /* share sheet — v rade aplikácií je aj Kontakty (potiahnuť doprava / Viac) */
     try {
       const file = new File([vcf], fname, { type: "text/vcard" });
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -510,12 +506,12 @@ const App = () => {
         return;
       }
     } catch (e) { if (e && e.name === "AbortError") { setTimeout(() => URL.revokeObjectURL(url), 2000); return; } }
-    /* 3) stiahnutie súboru */
+    /* záloha: stiahnutie súboru */
     const a = document.createElement("a");
     a.href = url; a.download = fname;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 2000);
-    setBackupMsg("Vizitka stiahnutá — otvor ju a ulož kontakt.");
+    setBackupMsg("Vizitka stiahnutá — otvor ju v Súboroch a ulož kontakt.");
   };
 
   const dateLabel = useMemo(() => new Date().toLocaleDateString("sk-SK", { weekday: "long", day: "numeric", month: "long" }), []);
