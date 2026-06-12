@@ -96,6 +96,7 @@ const stOf = (k) => STATUSES.find((s) => s.k === k) || STATUSES[0];
 const TYPES = ["Reštaurácia", "Kaviareň", "Bar", "Hotel", "Iné"];
 const QUICK_LOG = ["Volal som", "Napísal som", "Stretnutie / call", "Poslal som ponuku"];
 const STORAGE_KEY = "smm-pipeline-v1";
+const MONTHLY_GOAL = 650; // € / mes
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const pad2 = (n) => String(n).padStart(2, "0");
@@ -341,7 +342,11 @@ const App = () => {
   const [fStatus, setFStatus] = useState("Všetci");
   const [fSoc, setFSoc] = useState("Všetko");
   const [daySel, setDaySel] = useState(null);
+  const [q, setQ] = useState("");
   const [logDraft, setLogDraft] = useState("");
+  const [logEdit, setLogEdit] = useState(null); // {cid, idx, text}
+  const [showAllLog, setShowAllLog] = useState(false);
+  const [nextDraft, setNextDraft] = useState(null); // {cid, text, date}
   const [backupMsg, setBackupMsg] = useState("");
   const fileRef = useRef(null);
 
@@ -352,6 +357,15 @@ const App = () => {
 
   const addLog = (cl, text) => {
     updateClient(cl.id, { log: [...(cl.log || []), { d: nowStamp(), text }] });
+  };
+  const updateLogEntry = (cl, idx, text) => {
+    const log = [...(cl.log || [])];
+    if (!log[idx]) return;
+    log[idx] = { ...log[idx], text };
+    updateClient(cl.id, { log });
+  };
+  const deleteLogEntry = (cl, idx) => {
+    updateClient(cl.id, { log: (cl.log || []).filter((_, i) => i !== idx) });
   };
 
   const changeStatus = (cl, k) => {
@@ -387,6 +401,11 @@ const App = () => {
   const t = todayISO();
   const visible = useMemo(() => {
     let list = [...clients];
+    if (q.trim()) {
+      const s = q.trim().toLowerCase();
+      list = list.filter((c) => [c.name, c.person, c.type, c.note, c.email, c.phone, c.ig, c.fb, c.nextText, c.status]
+        .some((v) => (v || "").toLowerCase().includes(s)));
+    }
     if (fStatus !== "Všetci") list = list.filter((c) => c.status === fStatus);
     if (fSoc === "Má IG") list = list.filter((c) => c.ig);
     if (fSoc === "Bez IG") list = list.filter((c) => !c.ig);
@@ -407,7 +426,7 @@ const App = () => {
       return (a.name || "").localeCompare(b.name || "", "sk");
     });
     return list;
-  }, [clients, fStatus, fSoc, daySel, t]);
+  }, [clients, fStatus, fSoc, daySel, t, q]);
 
   /* záloha */
   const exportJSON = () => {
@@ -437,9 +456,58 @@ const App = () => {
     e.target.value = "";
   };
 
-  const copyText = async (txt) => {
-    try { await navigator.clipboard.writeText(txt); setBackupMsg("Skopírované: " + txt); setTimeout(() => setBackupMsg(""), 1600); }
+  const copyText = async (txt, label) => {
+    try { await navigator.clipboard.writeText(txt); setBackupMsg(label || ("Skopírované: " + txt)); setTimeout(() => setBackupMsg(""), 1800); }
     catch (e) { setBackupMsg("Kopírovanie sa nepodarilo."); }
+  };
+
+  /* všetky info o klientovi ako text — na poslanie ďalej */
+  const clientInfoText = (cl) => [
+    `${cl.name}${cl.type ? ` (${cl.type})` : ""}`,
+    cl.person || "",
+    cl.ig ? `IG: ${extURL(cl.ig)}` : "",
+    cl.fb ? `FB: ${extURL(cl.fb)}` : "",
+    cl.phone || "",
+    cl.email || "",
+  ].filter(Boolean).join("\n");
+
+  /* vizitka vCard → uloženie do kontaktov telefónu */
+  const vEsc = (s) => String(s || "").replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/[,;]/g, (m) => "\\" + m);
+  const saveVCard = async (cl) => {
+    const header = [cl.person, cl.name, `od ${shortDate(cl.firstContact)}`].filter(Boolean).join(" · ");
+    const note = [
+      cl.type,
+      `Status: ${cl.status}`,
+      cl.ig ? `IG: ${extURL(cl.ig)}` : "",
+      cl.fb ? `FB: ${extURL(cl.fb)}` : "",
+      `Prvý kontakt: ${shortDate(cl.firstContact)}`,
+      cl.note,
+    ].filter(Boolean).join("\n");
+    const vcf = [
+      "BEGIN:VCARD", "VERSION:3.0",
+      `FN:${vEsc(header)}`,
+      `N:${vEsc(header)};;;;`,
+      cl.name ? `ORG:${vEsc(cl.name)}` : "",
+      cl.phone ? `TEL;TYPE=CELL:${cl.phone.replace(/[^\d+]/g, "")}` : "",
+      cl.email ? `EMAIL:${cl.email}` : "",
+      `NOTE:${vEsc(note)}`,
+      "END:VCARD",
+    ].filter(Boolean).join("\r\n");
+    const fname = `${(cl.name || "kontakt").replace(/\s+/g, "-")}.vcf`;
+    try {
+      const file = new File([vcf], fname, { type: "text/vcard" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file] });
+        return;
+      }
+    } catch (e) { if (e && e.name === "AbortError") return; }
+    const blob = new Blob([vcf], { type: "text/vcard" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = fname;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    setBackupMsg("Vizitka stiahnutá — otvor ju a ulož kontakt.");
   };
 
   const dateLabel = useMemo(() => new Date().toLocaleDateString("sk-SK", { weekday: "long", day: "numeric", month: "long" }), []);
@@ -449,12 +517,23 @@ const App = () => {
   const renderPipeline = () => (
     <div style={{ padding: "0 16px" }}>
       {/* 7-dňový pás */}
-      <div className="rise" style={{ "--i": 1, marginBottom: 14 }}>
+      <div className="rise" style={{ "--i": 1, marginBottom: 10 }}>
         <WeekStrip clients={clients} sel={daySel} onSel={setDaySel} />
       </div>
 
+      {/* hľadanie */}
+      <div className="rise" style={{ "--i": 2, marginBottom: 10, position: "relative" }}>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔍 Hľadať… názov, meno, poznámka"
+          className="jfocus"
+          style={{ ...card(), width: "100%", padding: "11px 40px 11px 15px", borderRadius: 14, fontSize: 15, color: C.text, fontFamily: SANS, outline: "none" }} />
+        {q && (
+          <button onClick={() => setQ("")}
+            style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", color: C.faint, fontSize: 15, padding: 6 }}>✕</button>
+        )}
+      </div>
+
       {/* filtre */}
-      <div className="hscroll rise" style={{ "--i": 2, marginBottom: 2 }}>
+      <div className="hscroll rise" style={{ "--i": 3, marginBottom: 2 }}>
         <Chip small active={fStatus === "Všetci"} onClick={() => setFStatus("Všetci")}>Všetci <span style={{ fontFamily: MONO, opacity: 0.7 }}>{clients.length}</span></Chip>
         {STATUSES.map((s) => (
           <Chip key={s.k} small active={fStatus === s.k} color={s.color} onClick={() => setFStatus(fStatus === s.k ? "Všetci" : s.k)}>
@@ -462,7 +541,7 @@ const App = () => {
           </Chip>
         ))}
       </div>
-      <div className="hscroll rise" style={{ "--i": 3, marginBottom: 12 }}>
+      <div className="hscroll rise" style={{ "--i": 4, marginBottom: 12 }}>
         {["Všetko", "Má IG", "Bez IG", "Má FB", "Bez FB"].map((f) => (
           <Chip key={f} small active={fSoc === f} color={C.blue} onClick={() => setFSoc(f)}>{f}</Chip>
         ))}
@@ -482,7 +561,7 @@ const App = () => {
           <div key={cl.id} className={idx < 10 ? "rise" : undefined}
             style={{ "--i": Math.min(idx + 4, 10), ...card(), borderRadius: 20, marginBottom: 10, overflow: "hidden",
               background: `linear-gradient(90deg, ${s.tint} 0%, ${C.card} 55%)` }}>
-            <div onClick={() => { setExpanded(open ? null : cl.id); setLogDraft(""); }} style={{ padding: "13px 14px", cursor: "pointer" }}>
+            <div onClick={() => { setExpanded(open ? null : cl.id); setLogDraft(""); setLogEdit(null); setShowAllLog(false); setNextDraft(null); }} style={{ padding: "13px 14px", cursor: "pointer" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ color: C.text, fontSize: 16.5, fontWeight: 700, fontFamily: SANS, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -517,6 +596,8 @@ const App = () => {
                   {cl.email && <ActBtn onClick={() => copyText(cl.email)} color={C.dim} title="Kopírovať e-mail">⧉ mail</ActBtn>}
                   {cl.ig && <ActBtn href={extURL(cl.ig)} color="#D462A6" title="Instagram">IG</ActBtn>}
                   {cl.fb && <ActBtn href={extURL(cl.fb)} color={C.blue} title="Facebook">FB</ActBtn>}
+                  <ActBtn onClick={() => copyText(clientInfoText(cl), "Info skopírované ✓ — môžeš poslať")} color={C.brass} title="Kopírovať všetky info">⧉ Info</ActBtn>
+                  <ActBtn onClick={() => saveVCard(cl)} color={C.green} title="Uložiť do kontaktov v telefóne">👤 Kontakt</ActBtn>
                 </div>
                 {(cl.phone || cl.email) && (
                   <div style={{ fontSize: 12.5, color: C.dim, fontFamily: MONO, marginBottom: 10 }}>
@@ -542,7 +623,34 @@ const App = () => {
                       Hotovo ✓
                     </button>
                   </div>
-                ) : null}
+                ) : nextDraft && nextDraft.cid === cl.id ? (
+                  <div className="fade-anim" style={{ ...card({ border: `1px solid rgba(217,164,65,0.35)` }), borderRadius: 14, padding: "11px 12px", marginBottom: 10 }}>
+                    <input value={nextDraft.text} onChange={(e) => setNextDraft({ ...nextDraft, text: e.target.value })}
+                      placeholder="Čo treba urobiť…" autoFocus className="jfocus"
+                      style={{ ...card(), width: "100%", padding: "9px 12px", borderRadius: 11, fontSize: 14, color: C.text, fontFamily: SANS, outline: "none", marginBottom: 8 }} />
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <input type="date" value={nextDraft.date} onChange={(e) => setNextDraft({ ...nextDraft, date: e.target.value })}
+                        className="jfocus"
+                        style={{ ...card(), flex: 1, padding: "6px 12px", borderRadius: 11, fontSize: 14, color: C.text, fontFamily: SANS, outline: "none", minHeight: 40 }} />
+                      <button onClick={() => {
+                          if (nextDraft.text.trim() || nextDraft.date) {
+                            updateClient(cl.id, { nextText: nextDraft.text.trim(), nextDate: nextDraft.date });
+                            setNextDraft(null);
+                          }
+                        }} className="jpress"
+                        style={{ background: GRAD_BRASS, color: "#15120B", fontSize: 13, fontWeight: 700, padding: "0 16px", borderRadius: 11 }}>
+                        Uložiť
+                      </button>
+                      <button onClick={() => setNextDraft(null)} className="jpress"
+                        style={{ ...card(), color: C.faint, fontSize: 13, padding: "0 12px", borderRadius: 11 }}>✕</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button onClick={() => setNextDraft({ cid: cl.id, text: "", date: todayISO() })} className="jpress"
+                    style={{ ...card({ border: `1.5px dashed ${C.border}` }), width: "100%", borderRadius: 14, padding: "10px 0", color: C.brass, fontSize: 13.5, fontWeight: 600, fontFamily: SANS, marginBottom: 10 }}>
+                    + Ďalší krok
+                  </button>
+                )}
 
                 {cl.status === "Klient" && (fmtEur(cl.price) > 0 || fmtEur(cl.commission) > 0) && (
                   <div style={{ fontSize: 12.5, color: C.green, fontFamily: MONO, marginBottom: 10 }}>
@@ -555,12 +663,43 @@ const App = () => {
                 {/* denník aktivít */}
                 <div style={{ fontSize: 10.5, textTransform: "uppercase", color: C.faint, letterSpacing: "0.13em", marginBottom: 7 }}>Aktivity</div>
                 {(cl.log || []).length === 0 && <div style={{ fontSize: 12.5, color: C.faint, marginBottom: 8 }}>Zatiaľ žiadne.</div>}
-                {[...(cl.log || [])].reverse().slice(0, 12).map((l, i) => (
-                  <div key={i} style={{ fontSize: 12.5, color: C.dim, marginBottom: 4, display: "flex", gap: 8 }}>
-                    <span style={{ color: C.faint, fontFamily: MONO, flexShrink: 0 }}>{l.d.slice(5, 10).split("-").reverse().join(".") + "."}</span>
-                    <span>{l.text}</span>
-                  </div>
-                ))}
+                {(() => {
+                  const logArr = cl.log || [];
+                  const rev = logArr.map((l, i) => ({ ...l, _i: i })).reverse();
+                  const shown = showAllLog ? rev : rev.slice(0, 12);
+                  return shown.map((l) => {
+                    const editing = logEdit && logEdit.cid === cl.id && logEdit.idx === l._i;
+                    return (
+                      <div key={l._i} style={{ fontSize: 12.5, color: C.dim, marginBottom: 5, display: "flex", gap: 8, alignItems: "center" }}>
+                        <span style={{ color: C.faint, fontFamily: MONO, flexShrink: 0 }}>{l.d.slice(5, 10).split("-").reverse().join(".") + "."}</span>
+                        {editing ? (
+                          <React.Fragment>
+                            <input value={logEdit.text} onChange={(e) => setLogEdit({ ...logEdit, text: e.target.value })}
+                              className="jfocus" autoFocus
+                              style={{ ...card(), flex: 1, minWidth: 0, padding: "5px 9px", borderRadius: 9, fontSize: 12.5, color: C.text, fontFamily: SANS, outline: "none" }} />
+                            <button onClick={() => { updateLogEntry(cl, l._i, logEdit.text.trim() || l.text); setLogEdit(null); }}
+                              style={{ color: C.green, fontSize: 14, fontWeight: 700, padding: "2px 5px" }}>✓</button>
+                            <button onClick={() => setLogEdit(null)} style={{ color: C.faint, fontSize: 12, padding: "2px 5px" }}>✕</button>
+                          </React.Fragment>
+                        ) : (
+                          <React.Fragment>
+                            <span style={{ flex: 1, minWidth: 0 }}>{l.text}</span>
+                            <button onClick={() => setLogEdit({ cid: cl.id, idx: l._i, text: l.text })}
+                              style={{ color: C.faint, fontSize: 12.5, padding: "2px 5px" }}>✎</button>
+                            <button onClick={() => deleteLogEntry(cl, l._i)}
+                              style={{ color: C.red, fontSize: 12.5, padding: "2px 5px", opacity: 0.7 }}>✕</button>
+                          </React.Fragment>
+                        )}
+                      </div>
+                    );
+                  });
+                })()}
+                {(cl.log || []).length > 12 && (
+                  <button onClick={() => setShowAllLog(!showAllLog)} className="jpress"
+                    style={{ color: C.brass, fontSize: 12, fontFamily: SANS, padding: "2px 0 6px" }}>
+                    {showAllLog ? "Skryť staršie ↑" : `Zobraziť všetky (${(cl.log || []).length}) ↓`}
+                  </button>
+                )}
                 <div className="hscroll" style={{ margin: "8px 0 4px" }}>
                   {QUICK_LOG.map((q) => (
                     <Chip key={q} small onClick={() => addLog(cl, q)}>{q} +</Chip>
@@ -606,6 +745,27 @@ const App = () => {
         <div style={{ fontSize: 12, color: C.dim, fontFamily: MONO, marginTop: 4 }}>
           klienti platia spolu {stats.monthlyPrice} € / mes
         </div>
+        {(() => {
+          const pct = Math.min(100, Math.round((stats.monthlyCommission / MONTHLY_GOAL) * 100));
+          const missing = Math.max(0, MONTHLY_GOAL - stats.monthlyCommission);
+          const reached = stats.monthlyCommission >= MONTHLY_GOAL;
+          return (
+            <div style={{ margin: "16px 6px 2px" }}>
+              <div style={{ height: 9, borderRadius: 999, background: C.track, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${pct}%`, borderRadius: 999,
+                  background: reached ? C.green : GRAD_BRASS,
+                  boxShadow: `0 0 12px ${reached ? "rgba(62,207,142,0.5)" : "rgba(217,164,65,0.45)"}`,
+                  transition: "width 700ms cubic-bezier(.2,.8,.2,1)" }} />
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, fontFamily: MONO, marginTop: 7 }}>
+                <span style={{ color: reached ? C.green : C.brass, fontWeight: 700 }}>{pct}% cieľa</span>
+                <span style={{ color: reached ? C.green : C.dim }}>
+                  {reached ? "cieľ 650 € splnený ✓" : `chýba ${missing} € do ${MONTHLY_GOAL} €`}
+                </span>
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       <div className="rise" style={{ "--i": 1, ...card(), borderRadius: 22, padding: "16px 16px 6px", marginBottom: 14 }}>
