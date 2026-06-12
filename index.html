@@ -97,6 +97,7 @@ const TYPES = ["Reštaurácia", "Kaviareň", "Bar", "Hotel", "Iné"];
 const QUICK_LOG = ["Volal som", "Napísal som", "Stretnutie / call", "Poslal som ponuku"];
 const STORAGE_KEY = "smm-pipeline-v1";
 const MONTHLY_GOAL = 650; // € / mes
+const APP_UPDATED = "12. 6. 2026"; // posledná úprava — hardcoded
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const pad2 = (n) => String(n).padStart(2, "0");
@@ -472,48 +473,6 @@ const App = () => {
     cl.email || "",
   ].filter(Boolean).join("\n");
 
-  /* vizitka vCard → uloženie do kontaktov telefónu */
-  const vEsc = (s) => String(s || "").replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/[,;]/g, (m) => "\\" + m);
-  const saveVCard = async (cl) => {
-    const header = [cl.person, cl.name, `od ${shortDate(cl.firstContact)}`].filter(Boolean).join(" · ");
-    const note = [
-      cl.type,
-      `Status: ${cl.status}`,
-      cl.ig ? `IG: ${extURL(cl.ig)}` : "",
-      cl.fb ? `FB: ${extURL(cl.fb)}` : "",
-      `Prvý kontakt: ${shortDate(cl.firstContact)}`,
-      cl.note,
-    ].filter(Boolean).join("\n");
-    const vcf = [
-      "BEGIN:VCARD", "VERSION:3.0",
-      `FN:${vEsc(header)}`,
-      `N:${vEsc(header)};;;;`,
-      cl.name ? `ORG:${vEsc(cl.name)}` : "",
-      cl.phone ? `TEL;TYPE=CELL:${cl.phone.replace(/[^\d+]/g, "")}` : "",
-      cl.email ? `EMAIL:${cl.email}` : "",
-      `NOTE:${vEsc(note)}`,
-      "END:VCARD",
-    ].filter(Boolean).join("\r\n");
-    const fname = `${(cl.name || "kontakt").replace(/\s+/g, "-")}.vcf`;
-    const blob = new Blob([vcf], { type: "text/vcard;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    /* share sheet — v rade aplikácií je aj Kontakty (potiahnuť doprava / Viac) */
-    try {
-      const file = new File([vcf], fname, { type: "text/vcard" });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file] });
-        setTimeout(() => URL.revokeObjectURL(url), 2000);
-        return;
-      }
-    } catch (e) { if (e && e.name === "AbortError") { setTimeout(() => URL.revokeObjectURL(url), 2000); return; } }
-    /* záloha: stiahnutie súboru */
-    const a = document.createElement("a");
-    a.href = url; a.download = fname;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-    setBackupMsg("Vizitka stiahnutá — otvor ju v Súboroch a ulož kontakt.");
-  };
-
   const dateLabel = useMemo(() => new Date().toLocaleDateString("sk-SK", { weekday: "long", day: "numeric", month: "long" }), []);
   const commissionUp = useCountUp(tab === "money" ? stats.monthlyCommission : 0);
 
@@ -611,7 +570,6 @@ const App = () => {
                     title="Kopírovať všetky info">
                     {copiedInfo === cl.id ? "✓ Skopírované" : "⧉ Info"}
                   </ActBtn>
-                  <ActBtn onClick={() => saveVCard(cl)} color={C.green} title="Uložiť do kontaktov v telefóne">👤 Kontakt</ActBtn>
                 </div>
                 {(cl.phone || cl.email) && (
                   <div style={{ fontSize: 12.5, color: C.dim, fontFamily: MONO, marginBottom: 10 }}>
@@ -875,6 +833,10 @@ const App = () => {
 
         <div key={tab} className="fade-anim">
           {tab === "money" ? renderMoney() : renderPipeline()}
+        </div>
+
+        <div style={{ textAlign: "center", fontSize: 10, color: C.faint, fontFamily: MONO, padding: "2px 0 10px", letterSpacing: "0.04em" }}>
+          posledná úprava · {APP_UPDATED}
         </div>
       </div>
 
